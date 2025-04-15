@@ -2,9 +2,6 @@
 
 This folder is the CCS project for the I2C LED bar.
 
-> [!IMPORTANT]
-> The `i2c-led-bar` folder is the *CCS project*. This differs from previous projects where the `app` folder was the CCS project.
-
 ## Project organization
 
 ### 📁 Top-level folders

@@ -242,3 +242,4 @@ SECTIONS
 
 -l msp430fr2310.cmd
 
+
