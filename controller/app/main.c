@@ -3,20 +3,13 @@
 #include <stdint.h>
 
 // I2C control pins
-#define SDA_PIN BIT1
-#define SCL_PIN BIT2
+#define SDA_PIN BIT2
+#define SCL_PIN BIT3
 
 // I2C Addresses
 #define LED_PERIPHERAL_ADDR 0x48
 #define LCD_PERIPHERAL_ADDR 0x49
 #define RTC_PERIPHERAL_ADDR 0x68
-
-// Unlock sys vars
-volatile uint8_t unlocked = 0;
-volatile uint8_t cursor_on = 1;
-volatile uint8_t blink_on = 0;
-const char unlock_code[4] = { '1', '2', '3', '4' };
-volatile uint8_t code_index = 0;
 
 // I2C TX and RX Buffers
 volatile uint8_t i2c_tx_data[2];
