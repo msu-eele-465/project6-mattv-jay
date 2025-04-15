@@ -11,18 +11,37 @@
 #define LCD_PERIPHERAL_ADDR 0x49
 #define RTC_PERIPHERAL_ADDR 0x68
 
+// ADC constants
+#define ADC_CHANNEL BIT7  // LM19 connected to P1.7 (A7)
+#define SAMPLE_WINDOW 3   // Moving average window size
+
 // I2C TX and RX Buffers
 volatile uint8_t i2c_tx_data[2];
 volatile uint8_t i2c_tx_index = 0;
 volatile uint8_t i2c_rx_data = 0;
 
+// ADC vars
+volatile uint16_t temp_samples[SAMPLE_WINDOW] = {0};
+volatile uint8_t sample_index = 0;
+volatile uint8_t samples_collected = 0;
+volatile uint8_t display_fahrenheit = 0;
+
+unsigned int mode = 0; // 0 = off, 1 = heat, 2 = cool, 3 = match 
+
+void adc_init(void);
+
 void i2c_init(void);
 void i2c_write_byte_interrupt(uint8_t addr, uint8_t byte);
+void i2c_read_interrupt(uint8_t addr, uint8_t byte);
+void lcd_write(uint8_t byte);
+void send_to_led(uint8_t pattern);
+void read_rtc(void);
+
 void keypad_init(void);
 uint8_t keypad_get_key(void);
 void handle_keypress(uint8_t key);
-void lcd_write(uint8_t byte);
-void send_to_led(uint8_t pattern);
+
+void timer_init(void);
 
 int main(void)
 {
@@ -30,6 +49,10 @@ int main(void)
 
     i2c_init(); // Initialize I2C with int
     keypad_init(); // Initialize Keypad
+    adc_init(); // Initialize ADC
+    timer_init(); // Initialize any timers
+
+    __enable_interrupt(); // Enable global interrupts
 
     // Disable the GPIO power-on default high-impedance mode to activate
     // previously configure port settings
@@ -46,6 +69,24 @@ int main(void)
     }
 }
 
+void adc_init(void) {
+    P1SEL0 |= ADC_CHANNEL;
+    P1SEL1 |= ADC_CHANNEL;
+    
+    ADCCTL0 = ADCSHT_2 | ADCON;
+    ADCCTL1 = ADCSHP;
+    ADCCTL2 = ADCRES_2;
+    ADCMCTL0 = ADCINCH_7;
+    
+    ADCIE |= ADCIE0;
+}
+
+void timer_init(void) {
+    TB0CCTL0 = CCIE;
+    TB0CCR0 = 16384;  // Approx. 0.5s delay using ACLK
+    TB0CTL = TBSSEL_1 | MC_1 | ID_0;
+}
+
 void i2c_init(void)
 {
     P1SEL1 &= ~(SDA_PIN | SCL_PIN);
@@ -56,7 +97,16 @@ void i2c_init(void)
     UCB0CTLW0 &= ~UCSWRST; // Release eUSCI_B0 from reset
 
     UCB0IE |= UCTXIE0 | UCRXIE0; // Enable TX and RX interrupts
-    __enable_interrupt(); // Enable global interrupts
+}
+
+void keypad_init(void)
+{
+    P3DIR |= BIT0 | BIT1 | BIT2 | BIT3; // Rows as outputs
+    P3OUT |= BIT0 | BIT1 | BIT2 | BIT3; // Set all rows high (inactive)
+
+    P3DIR &= ~(BIT4 | BIT5 | BIT6 | BIT7); // Columns as inputs
+    P3REN |= BIT4 | BIT5 | BIT6 | BIT7; // Enable pull-up resistors
+    P3OUT |= BIT4 | BIT5 | BIT6 | BIT7;
 }
 
 void lcd_write(uint8_t byte)
@@ -69,14 +119,9 @@ void send_to_led(uint8_t pattern)
     i2c_write_byte_interrupt(LED_PERIPHERAL_ADDR, pattern);
 }
 
-void keypad_init(void)
+void read_rtc(void)
 {
-    P3DIR |= BIT0 | BIT1 | BIT2 | BIT3; // Rows as outputs
-    P3OUT |= BIT0 | BIT1 | BIT2 | BIT3; // Set all rows high (inactive)
-
-    P3DIR &= ~(BIT4 | BIT5 | BIT6 | BIT7); // Columns as inputs
-    P3REN |= BIT4 | BIT5 | BIT6 | BIT7; // Enable pull-up resistors
-    P3OUT |= BIT4 | BIT5 | BIT6 | BIT7;
+    i2c_read_interrupt(RTC_PERIPHERAL_ADDR, 0x00);
 }
 
 uint8_t keypad_get_key(void)
@@ -110,16 +155,30 @@ uint8_t keypad_get_key(void)
 
 void handle_keypress(uint8_t key)
 {
-    if (key == 'D' || key == 'A' || key == 'B')
+    switch(key)
     {
-        send_to_led(key);
-        lcd_write(key);
-        return;
-    }
-
-    if (key == 'C')
-    {
-        lcd_write(key);
+        case 'D':
+            mode = 0;
+            send_to_led(key);
+            lcd_write(key);
+            break;
+        case 'A':
+            mode = 1;
+            send_to_led(key);
+            lcd_write(key);
+            break;
+        case 'B':
+            mode = 2; 
+            send_to_led(key);
+            lcd_write(key);
+            break;
+        case 'C':
+            mode = 3;
+            lcd_write(key);
+            break;
+        case '*':
+            read_rtc();
+            break;
     }
 }
 
@@ -130,7 +189,19 @@ void i2c_write_byte_interrupt(uint8_t addr, uint8_t byte)
     i2c_tx_index = 1;
 
     UCB0I2CSA = addr; // Set I2C slave address
-    UCB0CTLW0 |= UCTXSTT; // Set to transmit mode and send start condition
+    UCB0CTLW0 |= UCTR | UCTXSTT; // Set to transmit mode and send start condition
+}
+
+void i2c_read_interrupt(uint8_t addr, uint8_t byte)
+{
+    i2c_write_byte_interrupt(addr, byte);
+
+    while((UCB0IFG & UCSTPIFG) == 0){}  // Wait for STOP
+    UCB0IFG &= ~UCSTPIFG;               // Clear STOP flag
+
+    UCB0I2CSA = addr; // Set I2C slave address
+    UCB0CTLW0 &= ~UCTR;
+    UCB0CTLW0 |= UCTXSTT; // Set to read mode and send start condition
 }
 
 #pragma vector = EUSCI_B0_VECTOR
@@ -154,9 +225,28 @@ __interrupt void EUSCI_B0_I2C_ISR(void)
 
         case USCI_I2C_UCRXIFG0:
             i2c_rx_data = UCB0RXBUF; // Read received byte
+            UCB0CTLW0 |= UCTXSTP; // Send stop condition
+            UCB0IFG &= ~UCRXIFG0; // Clear TX interrupt flag
             break;
 
         default:
             break;
+    }
+}
+
+#pragma vector = TIMER0_B0_VECTOR
+__interrupt void TIMER_ISR(void) {
+    ADCCTL0 |= ADCENC | ADCSC;
+}
+
+#pragma vector = ADC_VECTOR
+__interrupt void ADC_ISR(void) {
+    uint16_t adc_value = ADCMEM0;
+    
+    temp_samples[sample_index] = adc_value;
+    sample_index = (sample_index + 1) % SAMPLE_WINDOW;
+    
+    if (samples_collected < SAMPLE_WINDOW) {
+        samples_collected++;
     }
 }
