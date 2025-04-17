@@ -273,6 +273,7 @@ void handle_keypress(uint8_t key)
             reset_rtc();
             send_to_led(key);
             lcd_write(key);
+            P2OUT &= ~BIT6;
             P2OUT |= BIT7;
             break;
         case 'B':
@@ -280,7 +281,8 @@ void handle_keypress(uint8_t key)
             reset_rtc(); 
             send_to_led(key);
             lcd_write(key);
-            P2OUT |= BIT7;
+            P2OUT &= ~BIT7;
+            P2OUT |= BIT6;
             break;
         case 'C':
             mode = 3;
