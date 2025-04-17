@@ -1,6 +1,13 @@
+/**
+ * @file main.c
+ * @brief Main file to run all code.
+ */
+
 #include "msp430fr2355.h"
 #include <msp430.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 // I2C control pins
 #define SDA_PIN BIT2
@@ -16,9 +23,11 @@
 #define SAMPLE_WINDOW 3   // Moving average window size
 
 // I2C TX and RX Buffers
-volatile uint8_t i2c_tx_data[2];
-volatile uint8_t i2c_tx_index = 0;
-volatile uint8_t i2c_rx_data = 0;
+volatile uint8_t i2c_tx_data[4];
+volatile unsigned int i2c_tx_index = 0;
+volatile uint8_t i2c_rx_data[2];
+volatile unsigned int i2c_rx_index = 0;
+
 
 // ADC vars
 volatile uint16_t temp_samples[SAMPLE_WINDOW] = {0};
@@ -26,16 +35,22 @@ volatile uint8_t sample_index = 0;
 volatile uint8_t samples_collected = 0;
 volatile uint8_t display_fahrenheit = 0;
 
+unsigned int time_in_mode = 0; // in seconds
+
 unsigned int mode = 0; // 0 = off, 1 = heat, 2 = cool, 3 = match 
+
 
 void adc_init(void);
 
 void i2c_init(void);
-void i2c_write_byte_interrupt(uint8_t addr, uint8_t byte);
-void i2c_read_interrupt(uint8_t addr, uint8_t byte);
+void i2c_write_byte(uint8_t addr, uint8_t byte);
+void i2c_write_string(uint8_t addr, const uint8_t data[], unsigned int data_len);
+void i2c_read(uint8_t addr, uint8_t reg, unsigned int bytes);
 void lcd_write(uint8_t byte);
 void send_to_led(uint8_t pattern);
-void read_rtc(void);
+
+void read_rtc(unsigned int bytes);
+void reset_rtc(void);
 
 void keypad_init(void);
 uint8_t keypad_get_key(void);
@@ -91,9 +106,14 @@ void i2c_init(void)
 {
     P1SEL1 &= ~(SDA_PIN | SCL_PIN);
     P1SEL0 |= SDA_PIN | SCL_PIN; // Set SDA and SCL pins
+
     UCB0CTLW0 = UCSWRST; // Put eUSCI_B0 in reset mode
+
     UCB0CTLW0 |= UCMODE_3 | UCMST | UCSSEL_3 | UCTR; // I2C master mode
     UCB0BRW = 10; // Set I2C clock prescaler
+    UCB0CTLW1 |= UCASTP_2;      // Auto STOP when UCB0TBCNT reached
+    UCB0TBCNT = 0x01;
+
     UCB0CTLW0 &= ~UCSWRST; // Release eUSCI_B0 from reset
 
     UCB0IE |= UCTXIE0 | UCRXIE0; // Enable TX and RX interrupts
@@ -111,17 +131,58 @@ void keypad_init(void)
 
 void lcd_write(uint8_t byte)
 {
-    i2c_write_byte_interrupt(LCD_PERIPHERAL_ADDR, byte); // Use interrupt-based I2C
+    i2c_write_byte(LCD_PERIPHERAL_ADDR, byte); // Use interrupt-based I2C
 }
 
 void send_to_led(uint8_t pattern)
 {
-    i2c_write_byte_interrupt(LED_PERIPHERAL_ADDR, pattern);
+    i2c_write_byte(LED_PERIPHERAL_ADDR, pattern);
 }
 
-void read_rtc(void)
+void reset_rtc(void)
 {
-    i2c_read_interrupt(RTC_PERIPHERAL_ADDR, 0x00);
+    uint8_t buffer[] = {0x00, 0x00, 0x00}; //0x00 is the subaddress, 0 seconds, 0 minutes
+    int buff_size = sizeof(buffer);
+    i2c_write_string(0x68, buffer, buff_size);
+}
+
+void read_rtc(unsigned int bytes)
+{
+    i2c_read(RTC_PERIPHERAL_ADDR, 0x00, bytes);
+
+    if (mode != 0) // If current Peltier device mode isn't off 
+    {
+        char buffer[5] = "";
+
+        unsigned int min = ((i2c_rx_data[1] & 0xF0) >> 4) * 10 + (i2c_rx_data[1] & 0x0F);
+        unsigned int sec = ((i2c_rx_data[0] & 0xF0) >> 4) * 10 + (i2c_rx_data[0] & 0x0F);
+        time_in_mode = min * 60 + sec;
+
+        if (time_in_mode <= 999)
+        {
+            snprintf(buffer, sizeof(buffer), "%d", time_in_mode);
+            if  (time_in_mode < 10)
+            {
+                buffer[3] = buffer[0];
+                buffer[2] = 0x00;
+                buffer[1] = 0x00;
+            } 
+            else if (time_in_mode < 100) 
+            {
+                buffer[3] = buffer[1];
+                buffer[2] = buffer[0];
+                buffer[1] = 0x00;
+            }
+            else 
+            {
+                buffer[3] = buffer[2];
+                buffer[2] = buffer[1];
+                buffer[1] = buffer[0];
+            }
+            buffer[0] = 'S'; // put S to indicate "seconds spent in mode" to LCD driver
+            i2c_write_string(LCD_PERIPHERAL_ADDR, (uint8_t *)buffer, sizeof(buffer));
+        }
+    }
 }
 
 uint8_t keypad_get_key(void)
@@ -164,44 +225,76 @@ void handle_keypress(uint8_t key)
             break;
         case 'A':
             mode = 1;
+            reset_rtc();
             send_to_led(key);
             lcd_write(key);
             break;
         case 'B':
-            mode = 2; 
+            mode = 2;
+            reset_rtc(); 
             send_to_led(key);
             lcd_write(key);
             break;
         case 'C':
             mode = 3;
+            reset_rtc();
             lcd_write(key);
             break;
         case '*':
-            read_rtc();
+            read_rtc(2);
+            break;
+        case '#':
+            reset_rtc();
             break;
     }
 }
 
-void i2c_write_byte_interrupt(uint8_t addr, uint8_t byte)
+void i2c_write_byte(uint8_t addr, uint8_t byte)
 {
-    i2c_tx_data[0] = addr;
-    i2c_tx_data[1] = byte;
-    i2c_tx_index = 1;
+    i2c_tx_data[0] = byte;
+    i2c_tx_index = 0;
 
     UCB0I2CSA = addr; // Set I2C slave address
+    UCB0TBCNT = 0x01;
     UCB0CTLW0 |= UCTR | UCTXSTT; // Set to transmit mode and send start condition
-}
-
-void i2c_read_interrupt(uint8_t addr, uint8_t byte)
-{
-    i2c_write_byte_interrupt(addr, byte);
 
     while((UCB0IFG & UCSTPIFG) == 0){}  // Wait for STOP
-    UCB0IFG &= ~UCSTPIFG;               // Clear STOP flag
+    UCB0IFG &= ~UCSTPIFG;
+}
+
+void i2c_write_string(uint8_t addr, const uint8_t data[], unsigned int data_len)
+{
+    if (data_len > 4)
+    {
+        data_len = 4;
+    }
+
+    unsigned int i;
+    for (i = 0; i < data_len; i++)
+    {
+        i2c_tx_data[i] = data[i];
+    }
+    i2c_tx_index = 0;
 
     UCB0I2CSA = addr; // Set I2C slave address
+    UCB0TBCNT = data_len;
+    UCB0CTLW0 |= UCTR | UCTXSTT; // Set to transmit mode and send start condition
+
+    while((UCB0IFG & UCSTPIFG) == 0){}  // Wait for STOP
+    UCB0IFG &= ~UCSTPIFG;
+}
+
+void i2c_read(uint8_t addr, uint8_t reg, unsigned int bytes)
+{
+    i2c_rx_index = 0;
+    i2c_write_byte(addr, reg);
+
     UCB0CTLW0 &= ~UCTR;
+    UCB0TBCNT = bytes;
     UCB0CTLW0 |= UCTXSTT; // Set to read mode and send start condition
+
+    while((UCB0IFG & UCSTPIFG) == 0){}  // Wait for STOP
+    UCB0IFG &= ~UCSTPIFG;
 }
 
 #pragma vector = EUSCI_B0_VECTOR
@@ -212,21 +305,11 @@ __interrupt void EUSCI_B0_I2C_ISR(void)
         case USCI_NONE:
             break;
         case USCI_I2C_UCTXIFG0:
-            if (i2c_tx_index < 2)
-            {
-                UCB0TXBUF = i2c_tx_data[i2c_tx_index++]; // Load TX buffer
-            }
-            else
-            {
-                UCB0CTLW0 |= UCTXSTP; // Send stop condition
-                UCB0IFG &= ~UCTXIFG0; // Clear TX interrupt flag
-            }
+            UCB0TXBUF = i2c_tx_data[i2c_tx_index++]; // Load TX buffer
             break;
 
         case USCI_I2C_UCRXIFG0:
-            i2c_rx_data = UCB0RXBUF; // Read received byte
-            UCB0CTLW0 |= UCTXSTP; // Send stop condition
-            UCB0IFG &= ~UCRXIFG0; // Clear TX interrupt flag
+            i2c_rx_data[i2c_rx_index++] = UCB0RXBUF; // Read received byte
             break;
 
         default:

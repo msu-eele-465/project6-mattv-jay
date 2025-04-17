@@ -1,3 +1,8 @@
+/**
+ * @file i2c_rtc.c
+ * @brief File to test all code related to reading RTC values over i2c.
+ */
+
 #include "msp430fr2355.h"
 #include <msp430.h>
 #include <stdint.h>
@@ -12,8 +17,8 @@
 #define RTC_PERIPHERAL_ADDR 0x68
 
 // ADC constants
-#define ADC_CHANNEL BIT7  // LM19 connected to P1.7 (A7)
-#define SAMPLE_WINDOW 3   // Moving average window size
+#define ADC_CHANNEL BIT7 // LM19 connected to P1.7 (A7)
+#define SAMPLE_WINDOW 3 // Moving average window size
 
 // I2C TX and RX Buffers
 volatile uint8_t i2c_tx_data[2];
@@ -21,17 +26,15 @@ volatile unsigned int i2c_tx_index = 0;
 volatile uint8_t i2c_rx_data[2];
 volatile unsigned int i2c_rx_index = 0;
 
-
 // ADC vars
-volatile uint16_t temp_samples[SAMPLE_WINDOW] = {0};
+volatile uint16_t temp_samples[SAMPLE_WINDOW] = { 0 };
 volatile uint8_t sample_index = 0;
 volatile uint8_t samples_collected = 0;
 volatile uint8_t display_fahrenheit = 0;
 
 unsigned int time_in_mode = 0; // in seconds
 
-unsigned int mode = 0; // 0 = off, 1 = heat, 2 = cool, 3 = match 
-
+unsigned int mode = 0; // 0 = off, 1 = heat, 2 = cool, 3 = match
 
 void adc_init(void);
 
@@ -74,21 +77,23 @@ int main(void)
     }
 }
 
-void adc_init(void) {
+void adc_init(void)
+{
     P1SEL0 |= ADC_CHANNEL;
     P1SEL1 |= ADC_CHANNEL;
-    
+
     ADCCTL0 = ADCSHT_2 | ADCON;
     ADCCTL1 = ADCSHP;
     ADCCTL2 = ADCRES_2;
     ADCMCTL0 = ADCINCH_7;
-    
+
     ADCIE |= ADCIE0;
 }
 
-void timer_init(void) {
+void timer_init(void)
+{
     TB0CCTL0 = CCIE;
-    TB0CCR0 = 16384;  // Approx. 0.5s delay using ACLK
+    TB0CCR0 = 16384; // Approx. 0.5s delay using ACLK
     TB0CTL = TBSSEL_1 | MC_1 | ID_0;
 }
 
@@ -101,7 +106,7 @@ void i2c_init(void)
 
     UCB0CTLW0 |= UCMODE_3 | UCMST | UCSSEL_3 | UCTR; // I2C master mode
     UCB0BRW = 10; // Set I2C clock prescaler
-    UCB0CTLW1 |= UCASTP_2;      // Auto STOP when UCB0TBCNT reached
+    UCB0CTLW1 |= UCASTP_2; // Auto STOP when UCB0TBCNT reached
     UCB0TBCNT = 0x01;
 
     UCB0CTLW0 &= ~UCSWRST; // Release eUSCI_B0 from reset
@@ -133,7 +138,7 @@ void read_rtc(unsigned int bytes)
 {
     i2c_read_interrupt(RTC_PERIPHERAL_ADDR, 0x00, bytes);
 
-    if (mode != 0) // If current Peltier device mode isn't off 
+    if (mode != 0) // If current Peltier device mode isn't off
     {
         unsigned int min = ((i2c_rx_data[1] & 0xF0) >> 4) * 10 + (i2c_rx_data[1] & 0x0F);
         unsigned int sec = ((i2c_rx_data[0] & 0xF0) >> 4) * 10 + (i2c_rx_data[0] & 0x0F);
@@ -172,7 +177,7 @@ uint8_t keypad_get_key(void)
 
 void handle_keypress(uint8_t key)
 {
-    switch(key)
+    switch (key)
     {
         case 'D':
             mode = 0;
@@ -185,7 +190,7 @@ void handle_keypress(uint8_t key)
             lcd_write(key);
             break;
         case 'B':
-            mode = 2; 
+            mode = 2;
             send_to_led(key);
             lcd_write(key);
             break;
@@ -209,7 +214,7 @@ void i2c_write_byte_interrupt(uint8_t addr, uint8_t byte)
     UCB0TBCNT = 0x01;
     UCB0CTLW0 |= UCTR | UCTXSTT; // Set to transmit mode and send start condition
 
-    while((UCB0IFG & UCSTPIFG) == 0){}  // Wait for STOP
+    while ((UCB0IFG & UCSTPIFG) == 0){} // Wait for STOP
     UCB0IFG &= ~UCSTPIFG;
 }
 
@@ -222,7 +227,7 @@ void i2c_read_interrupt(uint8_t addr, uint8_t reg, unsigned int bytes)
     UCB0TBCNT = bytes;
     UCB0CTLW0 |= UCTXSTT; // Set to read mode and send start condition
 
-    while((UCB0IFG & UCSTPIFG) == 0){}  // Wait for STOP
+    while ((UCB0IFG & UCSTPIFG) == 0){} // Wait for STOP
     UCB0IFG &= ~UCSTPIFG;
 }
 
@@ -247,18 +252,21 @@ __interrupt void EUSCI_B0_I2C_ISR(void)
 }
 
 #pragma vector = TIMER0_B0_VECTOR
-__interrupt void TIMER_ISR(void) {
+__interrupt void TIMER_ISR(void)
+{
     ADCCTL0 |= ADCENC | ADCSC;
 }
 
 #pragma vector = ADC_VECTOR
-__interrupt void ADC_ISR(void) {
+__interrupt void ADC_ISR(void)
+{
     uint16_t adc_value = ADCMEM0;
-    
+
     temp_samples[sample_index] = adc_value;
     sample_index = (sample_index + 1) % SAMPLE_WINDOW;
-    
-    if (samples_collected < SAMPLE_WINDOW) {
+
+    if (samples_collected < SAMPLE_WINDOW)
+    {
         samples_collected++;
     }
 }
