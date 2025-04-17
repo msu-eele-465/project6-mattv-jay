@@ -37,7 +37,9 @@ volatile uint8_t display_fahrenheit = 0;
 
 unsigned int time_in_mode = 0; // in seconds
 
-unsigned int mode = 0; // 0 = off, 1 = heat, 2 = cool, 3 = match 
+unsigned int mode = 0; // 0 = off, 1 = heat, 2 = cool, 3 = match
+
+unsigned int refresh_rtc = 0;
 
 
 void adc_init(void);
@@ -52,7 +54,7 @@ void send_to_led(uint8_t pattern);
 void read_rtc(unsigned int bytes);
 void reset_rtc(void);
 
-void keypad_init(void);
+void gpio_init(void);
 uint8_t keypad_get_key(void);
 void handle_keypress(uint8_t key);
 
@@ -63,7 +65,7 @@ int main(void)
     WDTCTL = WDTPW | WDTHOLD; // Stop watchdog
 
     i2c_init(); // Initialize I2C with int
-    keypad_init(); // Initialize Keypad
+    gpio_init(); // Initialize Keypad
     adc_init(); // Initialize ADC
     timer_init(); // Initialize any timers
 
@@ -81,6 +83,30 @@ int main(void)
             handle_keypress(key); // Handle any detected keypress
         }
         __delay_cycles(100000); // delay
+
+        if (refresh_rtc == 1)
+        {
+            read_rtc(2);
+            refresh_rtc = 0;
+        }
+
+        // if (mode == 3) 
+        // {
+        //     if (plant_temp > 5 + ambient_temp)
+        //     {
+        //         P2OUT &= ~BIT7;
+        //         P2OUT |= BIT6;
+        //     }
+        //     else if (plant_temp < 5 + ambient_temp)
+        //     {
+        //         P2OUT &= ~BIT7;
+        //         P2OUT |= BIT6;
+        //     }
+        //     else
+        //     {
+        //         P2OUT &= ~(BIT6 | BIT7);
+        //     }
+        // }
     }
 }
 
@@ -100,6 +126,11 @@ void timer_init(void) {
     TB0CCTL0 = CCIE;
     TB0CCR0 = 16384;  // Approx. 0.5s delay using ACLK
     TB0CTL = TBSSEL_1 | MC_1 | ID_0;
+
+    TB1CTL = TBSSEL__ACLK | MC_2 | TBCLR | ID__8 | CNTL_1; // ACLK, continuous mode, clear TBR, divide by 8, length
+                                                           // 12-bit
+    TB1CTL &= ~TBIFG; // Clear CCR0 Flag
+    TB1CTL |= TBIE; // Enable TB1 Overflow IRQ
 }
 
 void i2c_init(void)
@@ -119,14 +150,19 @@ void i2c_init(void)
     UCB0IE |= UCTXIE0 | UCRXIE0; // Enable TX and RX interrupts
 }
 
-void keypad_init(void)
+void gpio_init(void)
 {
+    // Keypad GPIO
     P3DIR |= BIT0 | BIT1 | BIT2 | BIT3; // Rows as outputs
     P3OUT |= BIT0 | BIT1 | BIT2 | BIT3; // Set all rows high (inactive)
 
     P3DIR &= ~(BIT4 | BIT5 | BIT6 | BIT7); // Columns as inputs
     P3REN |= BIT4 | BIT5 | BIT6 | BIT7; // Enable pull-up resistors
     P3OUT |= BIT4 | BIT5 | BIT6 | BIT7;
+
+    // Peltier device outputs
+    P2DIR |= BIT6 | BIT7; // P2.6 is cool relay, P2.7 is heat relay
+    P2OUT &= ~(BIT6 | BIT7);
 }
 
 void lcd_write(uint8_t byte)
@@ -180,8 +216,15 @@ void read_rtc(unsigned int bytes)
                 buffer[1] = buffer[0];
             }
             buffer[0] = 'S'; // put S to indicate "seconds spent in mode" to LCD driver
-            i2c_write_string(LCD_PERIPHERAL_ADDR, (uint8_t *)buffer, sizeof(buffer));
         }
+        else 
+        {
+            buffer[3] = 9;
+            buffer[2] = 9;
+            buffer[1] = 9;
+            buffer[0] = 'S';
+        }
+        i2c_write_string(LCD_PERIPHERAL_ADDR, (uint8_t *)buffer, sizeof(buffer));
     }
 }
 
@@ -222,18 +265,22 @@ void handle_keypress(uint8_t key)
             mode = 0;
             send_to_led(key);
             lcd_write(key);
+            // i2c_write_string(LCD_PERIPHERAL_ADDR, (uint8_t){'S', '0', '0', '0'}, 4);
+            P2OUT &= ~(BIT6 | BIT7);
             break;
         case 'A':
             mode = 1;
             reset_rtc();
             send_to_led(key);
             lcd_write(key);
+            P2OUT |= BIT7;
             break;
         case 'B':
             mode = 2;
             reset_rtc(); 
             send_to_led(key);
             lcd_write(key);
+            P2OUT |= BIT7;
             break;
         case 'C':
             mode = 3;
@@ -320,6 +367,14 @@ __interrupt void EUSCI_B0_I2C_ISR(void)
 #pragma vector = TIMER0_B0_VECTOR
 __interrupt void TIMER_ISR(void) {
     ADCCTL0 |= ADCENC | ADCSC;
+}
+
+#pragma vector = TIMER1_B1_VECTOR
+__interrupt void ISR_TB1_OVERFLOW(void)
+{
+    refresh_rtc = 1;
+    
+    TB1CTL &= ~TBIFG;
 }
 
 #pragma vector = ADC_VECTOR
