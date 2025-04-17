@@ -22,15 +22,19 @@
 #define DB6 BIT6
 #define DB7 BIT7
 
-bool unlocked = false;
-char key = '0';
+#define CLEAR_LCD 0x01
+#define DEGREE_SYMBOL 0xDF
+
+char key = '\0';
 
 unsigned int time_since_active = 3;
 
-uint8_t buffer[3] = {0};
+uint8_t buffer[4] = { 0 };
 unsigned int index;
 
-char temp_out[] = "00.0";
+char ambient_out[] = "00.0";
+char plant_out[] = "00.0";
+char time_out[] = "000s";
 
 /**
  * Initializes all GPIO ports.
@@ -87,8 +91,10 @@ int main(void)
 {
     // uint8_t cursor = 0b00001100;
 
-    const char *PATTERNS[] = { "static",       "toggle",        "up counter",     "in and out",
-                               "down counter", "rotate 1 left", "rotate 7 right", "fill left" };
+    const char *STATE_NAMES[] = { "off  ", "heat ", "cool ", "match" };
+    unsigned int state = 0; // 0 = off, 1 = heat, 2 = cool, 3 = match
+
+    const char n = '3';
 
     WDTCTL = WDTPW | WDTHOLD; // Stop watchdog timer
 
@@ -98,89 +104,68 @@ int main(void)
     init_i2c();
 
     init_lcd();
-    send_cmd(0x01);
-    __delay_cycles(10000);
+    send_cmd(CLEAR_LCD);
+    __delay_cycles(10000); // Wait ~1.6 ms
+
+    // Set initial display
+    send_string(STATE_NAMES[0]);
+
+    send_cmd(0x88); // Send cursor to halfway of top row
+    send_string("A:");
+    send_string(ambient_out);
+    send_char(DEGREE_SYMBOL); // Degree symbol
+    send_char('C');
+
+    send_cmd(0xC0); // Send cursor to start of bottom row
+    send_char(n);
+
+    send_char(' ');
+    send_string(time_out);
+    send_string("  ");
+
+    send_string("P:");
+    send_string(plant_out);
+    send_char(DEGREE_SYMBOL); // Degree symbol
+    send_char('C');
 
     __enable_interrupt(); // Enable Maskable IRQs
 
-    unsigned int state = 0; //0 = normal, 1 = window size input, 2 = LED pattern input 
-    unsigned int pattern_num = 0;
-    char n = '3';
-
     while (true)
     {
-        if (unlocked && key != '\0')
-        {
-            if (state == 0)
-            {
-                if (key == '*') 
-                {
-                    state = 1;
-                    __disable_interrupt();
-                    send_cmd(0x01);
-                    __delay_cycles(10000); // Wait 1.6 ms
-                    send_string("set window size");
-                    __enable_interrupt();
-                }
-                else if (key == '#') 
-                {
-                    state = 2;
-                    __disable_interrupt();
-                    send_cmd(0x01);
-                    __delay_cycles(10000); // Wait 1.6 ms
-                    send_string("set pattern");
-                    __enable_interrupt();
-                }
-            }
-            else if (state == 1) 
-            {
-                if (key > '0' && key <= '9')
-                {
-                    n = key;
-                    __disable_interrupt();
-                    send_cmd(0x01);
-                    __delay_cycles(10000); // Wait 1.6 ms
-                    send_string(PATTERNS[pattern_num]);
-                    __enable_interrupt();
-                    state = 0;
-                }
-            } 
-            else if (state == 2) 
-            {
-                if (key >= '0' && key < '8') 
-                {
-                    pattern_num = (unsigned int)(key - '0');
-                    __disable_interrupt();
-                    send_cmd(0x01);
-                    __delay_cycles(10000); // Wait 1.6 ms
-                    send_string(PATTERNS[pattern_num]);
-                    __enable_interrupt();
-                    state = 0;
-                }
-            }
-
-            send_cmd(0xC0);
-            send_string("T=");
-            send_string(temp_out);
-            send_char(0xDF);
-            send_char('C');
-            send_cmd(0xCD);
-            send_string("N=");
-            send_char(n);
-            key = '\0';
+        switch (key) {
+            case 'D':
+                state = 0;
+                __disable_interrupt();
+                send_cmd(0x80);
+                send_string(STATE_NAMES[0]);
+                __enable_interrupt();
+                key = '\0';
+                break;
+            case 'A':
+                state = 1;
+                __disable_interrupt();
+                send_cmd(0x80);
+                send_string(STATE_NAMES[1]);
+                __enable_interrupt();
+                key = '\0';
+                break;
+            case 'B':
+                state = 2;
+                __disable_interrupt();
+                send_cmd(0x80);
+                send_string(STATE_NAMES[2]);
+                __enable_interrupt();
+                key = '\0';
+                break;
+            case 'C':
+                state = 3;
+                __disable_interrupt();
+                send_cmd(0x80);
+                send_string(STATE_NAMES[3]);
+                __enable_interrupt();
+                key = '\0';
+                break;
         }
-        if (unlocked)
-        {
-            send_cmd(0xC0);
-            send_string("T=");
-            send_string(temp_out);
-            send_char(0xDF);
-            send_char('C');
-        }
-        buffer[0] = 0;
-        buffer[1] = 0;
-        buffer[2] = 0;
-        index = 0;
     }
 }
 
@@ -190,6 +175,7 @@ int main(void)
  * Runs every second. Starts flashing status LED
  * 3 seconds after receiving something over I2C.
  */
+ int two_second_count = 0;
 #pragma vector = TIMER1_B1_VECTOR
 __interrupt void ISR_TB1_OVERFLOW(void)
 {
@@ -199,6 +185,27 @@ __interrupt void ISR_TB1_OVERFLOW(void)
     }
     time_since_active++;
 
+    send_cmd(0xC2);
+    send_string(time_out);
+
+    if (two_second_count == 2)
+    {
+        send_cmd(0x88); // Send cursor to halfway of top row
+        send_string("A:");
+        send_string(ambient_out);
+        send_char(DEGREE_SYMBOL); // Degree symbol
+        send_char('C');
+
+        // send_cmd(0xC0); // Send cursor to start of bottom row
+        // send_char(n);
+
+        send_cmd(0xC8);
+        send_string("P:");
+        send_string(plant_out);
+        send_char(DEGREE_SYMBOL); // Degree symbol
+        send_char('C');
+    }
+
     TB1CTL &= ~TBIFG; // Clear CCR0 Flag
 }
 
@@ -206,27 +213,33 @@ __interrupt void ISR_TB1_OVERFLOW(void)
  * I2C RX Interrupt.
  *
  * Stores value received over I2C in global var "key".
- * If 'U' is received over I2C, set the "unlocked" var.
  */
 uint8_t data_in;
 #pragma vector = EUSCI_B0_VECTOR
 __interrupt void EUSCI_B0_I2C_ISR(void)
 {
     data_in = UCB0RXBUF;
-    buffer[index++] = data_in;
-    if (buffer[2] != 0 && unlocked) 
-    {
-        temp_out[0] = (char)buffer[0];
-        temp_out[1] = (char)buffer[1];
-        temp_out[3] = (char)buffer[2];
-    }
-    else if (data_in == 'U')
-    {
-        unlocked = true;
-    }
-    else
+    if (data_in > 0x39)
     {
         key = (char)data_in;
+    }
+    else 
+    {
+        if(index > 3)
+        {
+            index = 0;
+            buffer[0] = 0;
+            buffer[1] = 0;
+            buffer[2] = 0;
+        }
+        buffer[index++] = data_in;
+    }
+
+    if (key == 'S' && index == 3)
+    {
+        time_out[0] = (char)buffer[0];
+        time_out[1] = (char)buffer[1];
+        time_out[2] = (char)buffer[2];
     }
     P2OUT |= BIT0;
     time_since_active = 0;

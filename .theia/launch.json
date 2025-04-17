@@ -1,0 +1,14 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "i2c-lcd",
+            "type": "ccs-debug",
+            "request": "launch",
+            "projectInfo": {
+                "name": "i2c-lcd",
+                "resourceId": "/i2c-lcd"
+            }
+        }
+    ]
+}
