@@ -164,14 +164,14 @@ void read_rtc(unsigned int bytes)
             if  (time_in_mode < 10)
             {
                 buffer[3] = buffer[0];
-                buffer[2] = 0x00;
-                buffer[1] = 0x00;
+                buffer[2] = 0x30;
+                buffer[1] = 0x30;
             } 
             else if (time_in_mode < 100) 
             {
                 buffer[3] = buffer[1];
                 buffer[2] = buffer[0];
-                buffer[1] = 0x00;
+                buffer[1] = 0x30;
             }
             else 
             {
