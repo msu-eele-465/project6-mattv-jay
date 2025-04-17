@@ -215,7 +215,7 @@ void i2c_write_byte_interrupt(uint8_t addr, uint8_t byte)
 
 void i2c_read_interrupt(uint8_t addr, uint8_t reg, unsigned int bytes)
 {
-    i2c_tx_index = 0;
+    i2c_rx_index = 0;
     i2c_write_byte_interrupt(addr, reg);
 
     UCB0CTLW0 &= ~UCTR;
