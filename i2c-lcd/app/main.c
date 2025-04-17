@@ -29,7 +29,7 @@ char key = '\0';
 
 unsigned int time_since_active = 3;
 
-uint8_t buffer[4] = { 0 };
+uint8_t buffer[3] = { 0 };
 unsigned int index;
 
 char ambient_out[] = "00.0";
@@ -225,21 +225,21 @@ __interrupt void EUSCI_B0_I2C_ISR(void)
     }
     else 
     {
-        if(index > 3)
-        {
-            index = 0;
-            buffer[0] = 0;
-            buffer[1] = 0;
-            buffer[2] = 0;
-        }
         buffer[index++] = data_in;
     }
 
-    if (key == 'S' && index == 3)
+    if(index >= 3)
     {
-        time_out[0] = (char)buffer[0];
-        time_out[1] = (char)buffer[1];
-        time_out[2] = (char)buffer[2];
+        if (key == 'S')
+        {
+            time_out[0] = (char)buffer[0];
+            time_out[1] = (char)buffer[1];
+            time_out[2] = (char)buffer[2];
+        }
+        index = 0;
+        buffer[0] = 0;
+        buffer[1] = 0;
+        buffer[2] = 0;
     }
     P2OUT |= BIT0;
     time_since_active = 0;
