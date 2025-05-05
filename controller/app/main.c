@@ -36,6 +36,7 @@ volatile uint8_t samples_collected = 0;
 volatile uint8_t display_fahrenheit = 0;
 
 unsigned int time_in_mode = 0; // in seconds
+unsigned int five_min_count = 0;
 
 unsigned int mode = 0; // 0 = off, 1 = heat, 2 = cool, 3 = match
 
@@ -75,6 +76,7 @@ int main(void)
     // previously configure port settings
     PM5CTL0 &= ~LOCKLPM5;
 
+    unsigned int peltier_off = 0;
     while (1)
     {
         uint8_t key = keypad_get_key();
@@ -88,6 +90,15 @@ int main(void)
         {
             read_rtc(2);
             refresh_rtc = 0;
+        }
+        
+        if (five_min_count >= 300 && peltier_off == 0)
+        {
+            mode = 0;
+            send_to_led(key);
+            lcd_write(key);
+            P2OUT &= ~(BIT6 | BIT7);
+            peltier_off = 1;
         }
 
         // if (mode == 3) 
@@ -186,9 +197,9 @@ void read_rtc(unsigned int bytes)
 {
     i2c_read(RTC_PERIPHERAL_ADDR, 0x00, bytes);
 
+    char buffer[5] = "";
     if (mode != 0) // If current Peltier device mode isn't off 
     {
-        char buffer[5] = "";
 
         unsigned int min = ((i2c_rx_data[1] & 0xF0) >> 4) * 10 + (i2c_rx_data[1] & 0x0F);
         unsigned int sec = ((i2c_rx_data[0] & 0xF0) >> 4) * 10 + (i2c_rx_data[0] & 0x0F);
@@ -219,13 +230,20 @@ void read_rtc(unsigned int bytes)
         }
         else 
         {
-            buffer[3] = 9;
-            buffer[2] = 9;
-            buffer[1] = 9;
+            buffer[3] = '9';
+            buffer[2] = '9';
+            buffer[1] = '9';
             buffer[0] = 'S';
         }
-        i2c_write_string(LCD_PERIPHERAL_ADDR, (uint8_t *)buffer, sizeof(buffer));
     }
+    else 
+    {
+            buffer[3] = '0';
+            buffer[2] = '0';
+            buffer[1] = '0';
+            buffer[0] = 'S';
+    }
+    i2c_write_string(LCD_PERIPHERAL_ADDR, (uint8_t *)buffer, sizeof(buffer));
 }
 
 uint8_t keypad_get_key(void)
@@ -265,29 +283,37 @@ void handle_keypress(uint8_t key)
             mode = 0;
             send_to_led(key);
             lcd_write(key);
-            // i2c_write_string(LCD_PERIPHERAL_ADDR, (uint8_t){'S', '0', '0', '0'}, 4);
             P2OUT &= ~(BIT6 | BIT7);
             break;
         case 'A':
-            mode = 1;
-            reset_rtc();
-            send_to_led(key);
-            lcd_write(key);
-            P2OUT &= ~BIT6;
-            P2OUT |= BIT7;
+            if (five_min_count < 300)
+            {
+                mode = 1;
+                reset_rtc();
+                send_to_led(key);
+                lcd_write(key);
+                P2OUT &= ~BIT6;
+                P2OUT |= BIT7;
+            }
             break;
         case 'B':
-            mode = 2;
-            reset_rtc(); 
-            send_to_led(key);
-            lcd_write(key);
-            P2OUT &= ~BIT7;
-            P2OUT |= BIT6;
+            if (five_min_count < 300)
+            {
+                mode = 2;
+                reset_rtc(); 
+                send_to_led(key);
+                lcd_write(key);
+                P2OUT &= ~BIT7;
+                P2OUT |= BIT6;
+            }
             break;
         case 'C':
-            mode = 3;
-            reset_rtc();
-            lcd_write(key);
+            if (five_min_count < 300)
+            {
+                mode = 3;
+                reset_rtc();
+                lcd_write(key);
+            }
             break;
         case '*':
             read_rtc(2);
@@ -375,6 +401,7 @@ __interrupt void TIMER_ISR(void) {
 __interrupt void ISR_TB1_OVERFLOW(void)
 {
     refresh_rtc = 1;
+    five_min_count = five_min_count + 1;
     
     TB1CTL &= ~TBIFG;
 }
